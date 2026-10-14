@@ -1,4 +1,5 @@
 #pragma once
+#include "BgData.h"
 #include "PluginProcessor.h"
 
 struct DeckLook : public juce::LookAndFeel_V4
@@ -62,6 +63,7 @@ public:
           keys (p.keyState, juce::MidiKeyboardComponent::horizontalKeyboard)
     {
         setLookAndFeel (&look);
+        bgImage = juce::ImageFileFormat::loadFrom (BgData::data, (size_t) BgData::size);
 
         addKnob ("cutoff", "CUTOFF", 0xffffd21f, " Hz");
         addKnob ("reso", "RESO", 0xffff5fa8, "");
@@ -107,6 +109,12 @@ public:
     {
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1a0b3a), 0.0f, 0.0f, juce::Colour (0xff04101e), 0.0f, (float) getHeight(), false));
         g.fillAll();
+        if (bgImage.isValid())
+        {
+            g.drawImage (bgImage, getLocalBounds().toFloat());
+            g.setColour (juce::Colour (0x66050212));
+            g.fillAll();
+        }
         g.setGradientFill (juce::ColourGradient (juce::Colour (0x55ff4fd8), 200.0f, 150.0f, juce::Colours::transparentBlack, 520.0f, 400.0f, true));
         g.fillAll();
         g.setGradientFill (juce::ColourGradient (juce::Colour (0x4430e0d0), 860.0f, 330.0f, juce::Colours::transparentBlack, 1100.0f, 600.0f, true));
@@ -243,6 +251,7 @@ private:
 
     SynapseDeckProcessor& proc;
     DeckLook look;
+    juce::Image bgImage;
     std::vector<std::unique_ptr<Knob>> knobs;
     juce::ComboBox preset, style, root;
     juce::ToggleButton drumsB, bassB, freeB;
