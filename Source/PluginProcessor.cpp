@@ -174,7 +174,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SynapseDeckProcessor::create
 
     p.push_back (std::make_unique<B> ("drums", "Drums", false));
     p.push_back (std::make_unique<C> ("style", "Rhythm Style",
-        juce::StringArray { "Goa Classic", "Full-On", "Progressive", "Dark Psy", "Forest" }, 0));
+        juce::StringArray { "Goa Classic", "Full-On", "Progressive", "Dark Psy", "Forest", "Goa Rolling", "Goa Trippy", "Full-On Uplift", "Full-On Bounce", "Psytrance Zoom", "Psy Twilight", "Hi-Tech 172" }, 0));
     p.push_back (std::make_unique<B> ("bass", "Rolling Bass", true));
     p.push_back (std::make_unique<C> ("bassRoot", "Bass Root",
         juce::StringArray { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }, 9));
@@ -226,6 +226,21 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     buffer.clear();
+    keyState.processNextMidiBuffer (midi, 0, n, true);
+    {
+        juce::MidiBuffer synthMidi;
+        for (const auto meta : midi)
+        {
+            const auto msg = meta.getMessage();
+            if (msg.getChannel() == 10)
+            {
+                if (msg.isNoteOn()) drums.hitNote (msg.getNoteNumber(), meta.samplePosition, msg.getFloatVelocity());
+            }
+            else
+                synthMidi.addEvent (msg, meta.samplePosition);
+        }
+        midi.swapWith (synthMidi);
+    }
 
     auto prm = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
 
@@ -266,6 +281,22 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         reverb.process (ctx);
     }
 
+    auto renderHitsOnly = [&]
+    {
+        if (drumBuf.getNumSamples() < n) drumBuf.setSize (2, n, false, false, true);
+        drumBuf.clear();
+        if ((int) duck.size() < n) duck.assign ((size_t) n, 0.0f);
+        drums.processHits (drumBuf.getWritePointer (0), drumBuf.getWritePointer (1), n, prm ("drumLevel"), duck.data());
+        const float sc = prm ("sidechain");
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* d = buffer.getWritePointer (ch);
+            for (int i = 0; i < n; ++i) d[i] *= 1.0f - sc * duck[(size_t) i];
+        }
+        buffer.addFrom (0, 0, drumBuf, 0, 0, n);
+        buffer.addFrom (1, 0, drumBuf, 1, 0, n);
+    };
+
     // ---- drums + bass (bypass the synth filter) ----
     if (prm ("drums") > 0.5f)
     {
@@ -289,7 +320,7 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             freeRunPos += n * bpm / 60.0 * 4.0 / sr;
             run = true;
         }
-        if (! run) { drums.reset(); }
+        if (! run) { drums.resetStep(); renderHitsOnly(); }
         else
         {
             if (drumBuf.getNumSamples() < n) drumBuf.setSize (2, n, false, false, true);
@@ -308,7 +339,10 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         }
     }
     else
-        drums.reset();
+    {
+        drums.resetStep();
+        renderHitsOnly();
+    }
 
     buffer.applyGain (prm ("volume"));
     {
