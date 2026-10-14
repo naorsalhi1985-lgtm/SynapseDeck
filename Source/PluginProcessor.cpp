@@ -84,6 +84,8 @@ namespace
             const int N = juce::jlimit (1, kMaxUni, (int) apvts.getRawParameterValue ("unison")->load());
             const float sub = juce::jmax (P.sub, apvts.getRawParameterValue ("sub")->load());
             const float norm = 1.0f / std::sqrt ((float) N);
+            if (pi != lastPi) { lastPi = pi; fade = 0.0f; }
+            const float subTarget = sub;
 
             double dt[kMaxUni]; float gl[kMaxUni], gr[kMaxUni]; int wv[kMaxUni];
             for (int u = 0; u < N; ++u)
@@ -110,8 +112,10 @@ namespace
                     sl += o * gl[u]; sr2 += o * gr[u];
                     ph[u] += dt[u]; if (ph[u] >= 1.0) ph[u] -= 1.0;
                 }
-                const float s = std::sin ((float) (phSub * juce::MathConstants<double>::twoPi)) * sub * 1.1f;
-                const float gain = env * noteVel * 0.2f;
+                subS += (subTarget - subS) * 0.002f;
+                if (fade < 1.0f) fade = juce::jmin (1.0f, fade + 1.0f / 512.0f);
+                const float s = std::sin ((float) (phSub * juce::MathConstants<double>::twoPi)) * subS * 1.1f;
+                const float gain = env * noteVel * 0.2f * fade;
                 L[i] += (sl * norm * 1.2f + s) * gain;
                 if (R) R[i] += (sr2 * norm * 1.2f + s) * gain;
                 phSub += dS; if (phSub >= 1.0) phSub -= 1.0;
@@ -138,6 +142,8 @@ namespace
         double phSub = 0;
         float noteVel = 1.0f;
         int baseMidi = 60;
+        int lastPi = -1;
+        float fade = 1.0f, subS = 0.0f;
     };
 }
 
