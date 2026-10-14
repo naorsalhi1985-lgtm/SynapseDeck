@@ -12,15 +12,30 @@ struct DeckLook : public juce::LookAndFeel_V4
         auto c = b.getCentre();
         g.setColour (juce::Colour (0xaa10081e));
         g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
-        juce::Path bg, fg;
-        bg.addCentredArc (c.x, c.y, r - 2, r - 2, 0, a0, a1, true);
-        g.setColour (juce::Colour (0x40ffffff));
-        g.strokePath (bg, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        const int N = 21;
+        const float rr = r - 3.0f;
         const float ang = a0 + pos * (a1 - a0);
-        fg.addCentredArc (c.x, c.y, r - 2, r - 2, 0, a0, ang, true);
-        g.setColour (col);
-        g.strokePath (fg, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.fillEllipse (c.x + (r - 2) * std::sin (ang) - 4, c.y - (r - 2) * std::cos (ang) - 4, 8, 8);
+        for (int i = 0; i < N; ++i)
+        {
+            const float t = (float) i / (float) (N - 1);
+            const float a = a0 + t * (a1 - a0);
+            const float px = c.x + rr * std::sin (a), py = c.y - rr * std::cos (a);
+            const bool lit = t <= pos + 0.001f;
+            if (lit)
+            {
+                g.setGradientFill (juce::ColourGradient (col.withAlpha (0.55f), px, py, col.withAlpha (0.0f), px + 9.0f, py, true));
+                g.fillEllipse (px - 9.0f, py - 9.0f, 18.0f, 18.0f);
+                g.setColour (col.brighter (0.4f));
+                g.fillEllipse (px - 3.0f, py - 3.0f, 6.0f, 6.0f);
+            }
+            else
+            {
+                g.setColour (juce::Colour (0x44ffffff));
+                g.fillEllipse (px - 1.8f, py - 1.8f, 3.6f, 3.6f);
+            }
+        }
+        g.setColour (juce::Colours::white);
+        g.fillEllipse (c.x + rr * std::sin (ang) - 4.5f, c.y - rr * std::cos (ang) - 4.5f, 9.0f, 9.0f);
         g.setColour (juce::Colours::white);
         g.setFont (juce::FontOptions (juce::jmax (10.0f, r * 0.42f), juce::Font::bold));
         g.drawText (s.getTextFromValue (s.getValue()), b.toNearestInt(), juce::Justification::centred);
@@ -69,6 +84,12 @@ public:
         addToggle (drumsB, drumsA, "drums", "DRUMS");
         addToggle (bassB, bassA, "bass", "ROLLING BASS");
         addToggle (freeB, freeA, "freeRun", "FREE RUN");
+        expDrums.setButtonText ("EXPORT DRUMS MIDI");
+        expBass.setButtonText ("EXPORT BASS MIDI");
+        expDrums.onClick = [this] { exportMidi (true); };
+        expBass.onClick  = [this] { exportMidi (false); };
+        addAndMakeVisible (expDrums);
+        addAndMakeVisible (expBass);
 
         keys.setKeyWidth (46.0f);
         keys.setAvailableRange (36, 96);
@@ -133,7 +154,9 @@ public:
         root.setBounds (240, 436, 90, 30);
         drumsB.setBounds (350, 436, 120, 30);
         bassB.setBounds (480, 436, 150, 30);
-        freeB.setBounds (640, 436, 120, 30);
+        freeB.setBounds (640, 436, 100, 30);
+        expDrums.setBounds (750, 436, 130, 30);
+        expBass.setBounds (890, 436, 130, 30);
         keys.setBounds (32, 506, 976, 106);
     }
 
@@ -176,11 +199,54 @@ private:
         addAndMakeVisible (b);
     }
 
+    void exportMidi (bool drumsFile)
+    {
+        const int styleIdx = juce::jlimit (0, 11, (int) *proc.apvts.getRawParameterValue ("style"));
+        const int rootNote = (int) *proc.apvts.getRawParameterValue ("bassRoot");
+        const auto& st = kStyles[styleIdx];
+        const int ppq = 480, stepTicks = ppq / 4, bars = 8;
+        juce::MidiMessageSequence seq;
+        seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) (60000000.0 / st.bpm)), 0.0);
+        auto add = [&] (int ch, int note, int step, int lenTicks, float vel)
+        {
+            const double t = (double) (step * stepTicks);
+            seq.addEvent (juce::MidiMessage::noteOn (ch, note, vel), t);
+            seq.addEvent (juce::MidiMessage::noteOff (ch, note), t + lenTicks);
+        };
+        for (int s = 0; s < bars * 16; ++s)
+        {
+            const int p = s % 16;
+            if (drumsFile)
+            {
+                if (st.kick[p] == 'x')      add (10, 36, s, 60, 0.95f);
+                if (st.clap[p] == 'x')      add (10, 39, s, 60, 0.9f);
+                if (st.openHat[p] == 'x')   add (10, 46, s, 60, 0.8f);
+                else if (st.closedHat[p] == 'x') add (10, 42, s, 40, 0.6f);
+                if (st.ride[p] == 'x')      add (10, 51, s, 60, 0.6f);
+                if (st.perc[p] == 'x')      add (10, 45, s, 60, 0.7f);
+            }
+            else if (st.bass[p] == 'x')
+                add (1, 36 + rootNote + st.bassOct[p], s, (int) (stepTicks * 0.85), 0.9f);
+        }
+        seq.updateMatchedPairs();
+        juce::MidiFile mf;
+        mf.setTicksPerQuarterNote (ppq);
+        mf.addTrack (seq);
+        auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("SynapseDeck");
+        dir.createDirectory();
+        auto f = dir.getChildFile (juce::String (st.name) + (drumsFile ? " Drums.mid" : " Bass.mid"));
+        f.deleteFile();
+        juce::FileOutputStream os (f);
+        if (os.openedOk()) { mf.writeTo (os); os.flush(); }
+        f.revealToUser();
+    }
+
     SynapseDeckProcessor& proc;
     DeckLook look;
     std::vector<std::unique_ptr<Knob>> knobs;
     juce::ComboBox preset, style, root;
     juce::ToggleButton drumsB, bassB, freeB;
+    juce::ToggleButton expDrums, expBass;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> presetA, styleA, rootA;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> drumsA, bassA, freeA;
     juce::MidiKeyboardComponent keys;
