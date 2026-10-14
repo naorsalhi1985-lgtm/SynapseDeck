@@ -12,7 +12,7 @@ struct RhythmStyle
     int bassOct[16];
 };
 
-static const RhythmStyle kStyles[5] = {
+static const RhythmStyle kStyles[12] = {
     { "Goa Classic", 142, "x...x...x...x...", "..x...x...x...x.", ".x.x.x.x.x.x.x.x", "....x.......x...", "................", "................",
       ".xxx.xxx.xxx.xxx", { 0,0,0,12,0,0,12,0,0,0,0,12,0,12,0,12 } },
     { "Full-On", 145, "x...x...x...x...", "..x...x...x...x.", "x.x.x.x.x.x.x.x.", "....x.......x.x.", "...x.......x..x.", "................",
@@ -22,7 +22,21 @@ static const RhythmStyle kStyles[5] = {
     { "Dark Psy", 148, "x...x...x...x...", "..x...x...x...xx", "xxxxxxxxxxxxxxxx", "....x.......x...", "..x..x..x..x..x.", "................",
       ".xxx.xxx.xxx.xxx", { 0,0,12,0,0,0,1,0,0,12,0,0,0,1,0,0 } },
     { "Forest", 152, "x...x...x...x...", "..x...x...x...x.", ".x.x.x.x.x.x.x.x", "....x.......x...", "...x..x....x..x.", "x.x.x.x.x.x.x.x.",
-      ".xx..xxx.xx..xxx", { 0,0,0,12,0,0,3,12,0,0,0,12,0,0,5,12 } }
+      ".xx..xxx.xx..xxx", { 0,0,0,12,0,0,3,12,0,0,0,12,0,0,5,12 } },
+    { "Goa Rolling", 144, "x...x...x...x...", "..x...x...x...x.", ".x.x.x.x.x.x.x.x", "....x.......x...", "...x.......x....", "................",
+      ".xxx.xxx.xxx.xxx", { 0,0,12,0,0,12,0,12,0,0,12,0,0,12,0,0 } },
+    { "Goa Trippy", 138, "x...x...x...x..x", "..x...x...x...x.", ".x.x.x.x.x.x.x.x", "....x.......x...", ".x..x...x..x....", "................",
+      ".x.xx.x..x.xx.x.", { 0,0,0,12,0,0,0,0,0,0,0,12,0,0,0,0 } },
+    { "Full-On Uplift", 146, "x...x...x...x...", "..x...x...x...x.", "x.x.x.x.x.x.x.x.", "....x.......x.x.", "..x...x...x...x.", "................",
+      ".xxx.xxx.xxx.xxx", { 0,0,12,0,0,12,0,0,0,0,12,0,0,12,0,0 } },
+    { "Full-On Bounce", 148, "x...x...x...x...", "..x...x...x...x.", ".x.x.x.x.x.x.x.x", "....x.......x...", "...x.......x..x.", "x.x.x.x.x.x.x.x.",
+      "x.xx.xx.x.xx.xx.", { 0,0,12,0,0,12,0,0,0,0,12,0,0,12,0,0 } },
+    { "Psytrance Zoom", 145, "x...x...x...x...", "..x...x...x...x.", ".x.x.x.x.x.x.x.x", "....x.......x...", "................", "................",
+      ".xxxxxxx.xxxxxxx", { 0,0,12,0,12,0,12,0,0,0,12,0,12,0,12,0 } },
+    { "Psy Twilight", 150, "x...x...x...x...", "..x...x...x...xx", "xxxxxxxxxxxxxxxx", "....x.......x...", "..x..x..x..x..x.", "................",
+      ".xx.xx.xx.xx.xx.", { 0,0,12,0,0,13,0,0,12,0,0,13,0,0,12,0 } },
+    { "Hi-Tech 172", 172, "x...x...x...x...", "..x...x...x...x.", "x.x.x.x.x.x.x.x.", "....x.......x...", ".x..x..x.x..x...", "................",
+      "xxxxxxxxxxxxxxxx", { 0,12,0,12,0,12,0,12,0,12,0,12,0,12,0,13 } }
 };
 
 class DrumEngine
@@ -38,12 +52,53 @@ public:
 
     void reset() { for (auto& h : hits) h.active = false; lastStep = -1000000; }
 
+    void resetStep() { lastStep = -1000000; }
+
+    // Drum notes on MIDI channel 10 (GM-ish map). delaySamples = offset inside the block.
+    void hitNote (int note, int delaySamples, float vel)
+    {
+        const float v = juce::jlimit (0.2f, 1.0f, vel) ;
+        const float ds = (float) delaySamples / (float) sampleRate;
+        switch (note)
+        {
+            case 36: { auto* h = alloc(); *h = Hit();
+                       h->active = true; h->kind = Kick; h->vol = 0.85f * v; h->len = (int) (0.32 * sampleRate);
+                       h->f0 = 190.0; h->f1 = 46.0; h->delay = delaySamples; duckEnv = 1.0f; break; }
+            case 39: noise (0.02f, 0.22f * v, 1400.0f, 1.2f, false, ds);
+                     noise (0.02f, 0.22f * v, 1400.0f, 1.2f, false, ds + 0.012f);
+                     noise (0.14f, 0.20f * v, 1400.0f, 1.2f, false, ds + 0.024f); break;
+            case 42: noise (0.04f, 0.07f * v, 8500.0f, 0.7f, true, ds); break;
+            case 46: noise (0.15f, 0.15f * v, 7000.0f, 0.7f, true, ds); break;
+            case 51: noise (0.22f, 0.05f * v, 9500.0f, 0.7f, true, ds); break;
+            case 45: { auto* h = alloc(); *h = Hit();
+                       h->active = true; h->kind = Perc; h->vol = 0.3f * v; h->len = (int) (0.13 * sampleRate);
+                       h->f0 = 420.0; h->f1 = 190.0; h->delay = delaySamples; break; }
+            default: break;
+        }
+    }
+
+    // Renders already-triggered hits without running the step sequencer.
+    void processHits (float* L, float* R, int n, float level, float* duckOut)
+    {
+        const float duckDecay = std::exp (-1.0f / (0.17f * (float) sampleRate));
+        for (int i = 0; i < n; ++i)
+        {
+            if (duckOut != nullptr) duckOut[i] = duckEnv;
+            duckEnv *= duckDecay;
+            float s = 0.0f;
+            for (auto& h : hits) if (h.active) s += render (h);
+            s *= level;
+            L[i] += s;
+            R[i] += s;
+        }
+    }
+
     // Renders into L/R (adds). stepStartPos is the position in 16th notes at the first sample.
     void process (float* L, float* R, int n, double stepStartPos, double bpm,
                   int style, bool bassOn, int bassRoot, float level, float* duckOut)
     {
         const double stepsPerSample = bpm / 60.0 * 4.0 / sampleRate;
-        const auto& st = kStyles[juce::jlimit (0, 4, style)];
+        const auto& st = kStyles[juce::jlimit (0, 11, style)];
         const float sixteenth = (float) (sampleRate * 60.0 / bpm / 4.0);
         const float duckDecay = std::exp (-1.0f / (0.17f * (float) sampleRate));
 
