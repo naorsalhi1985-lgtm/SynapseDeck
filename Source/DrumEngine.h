@@ -62,8 +62,8 @@ public:
         switch (note)
         {
             case 36: { auto* h = alloc(); *h = Hit();
-                       h->active = true; h->kind = Kick; h->vol = 0.85f * v; h->len = (int) (0.32 * sampleRate);
-                       h->f0 = 190.0; h->f1 = 46.0; h->delay = delaySamples; duckEnv = 1.0f; break; }
+                       h->active = true; h->kind = Kick; h->vol = 0.95f * v; h->len = (int) (0.27 * sampleRate);
+                       h->f0 = 260.0; h->f1 = 47.0; h->delay = delaySamples; duckEnv = 1.0f; break; }
             case 39: noise (0.02f, 0.22f * v, 1400.0f, 1.2f, false, ds);
                      noise (0.02f, 0.22f * v, 1400.0f, 1.2f, false, ds + 0.012f);
                      noise (0.14f, 0.20f * v, 1400.0f, 1.2f, false, ds + 0.024f); break;
@@ -168,10 +168,10 @@ private:
         if (on (st.kick, p))
         {
             auto* h = alloc(); *h = Hit();
-            h->active = true; h->kind = Kick; h->vol = 0.85f; h->len = (int) (0.32 * sampleRate);
-            h->f0 = 190.0; h->f1 = 46.0;
+            h->active = true; h->kind = Kick; h->vol = 0.95f; h->len = (int) (0.27 * sampleRate);
+            h->f0 = 260.0; h->f1 = 47.0;
             duckEnv = 1.0f;
-            noise (0.012f, 0.18f, 3500.0f, 0.7f, true);
+            noise (0.008f, 0.30f, 4200.0f, 0.7f, true);
         }
         if (on (st.openHat, p))        noise (0.15f, 0.15f, 7000.0f, 0.7f, true);
         else if (on (st.closedHat, p)) noise (0.04f, 0.07f, 8500.0f, 0.7f, true);
@@ -192,10 +192,11 @@ private:
         {
             auto* h = alloc(); *h = Hit();
             const int midi = 36 + bassRoot + st.bassOct[p];
-            h->active = true; h->kind = Bass; h->vol = 0.26f;
+            h->active = true; h->kind = Bass; h->vol = 0.34f;
+            h->lpCut0 = 2400.0f; h->lpCut1 = 150.0f;
             h->len = juce::jmax (64, (int) (sixteenth * 0.85f));
             h->f0 = 440.0 * std::pow (2.0, (midi - 69) / 12.0);
-            setSvf (*h, 500.0f, 5.0f, false);
+            setSvf (*h, 1500.0f, 4.2f, false);
         }
     }
 
@@ -229,10 +230,10 @@ private:
         {
             case Kick:
             {
-                const double f = h.f1 + (h.f0 - h.f1) * std::exp (-(double) h.age / (0.03 * sampleRate));
+                const double f = h.f1 + (h.f0 - h.f1) * std::exp (-(double) h.age / (0.016 * sampleRate));
                 h.phase += twoPi * f / sampleRate;
                 const float atk = juce::jmin (1.0f, (float) h.age / (0.003f * (float) sampleRate));
-                out = std::tanh (1.7f * (float) std::sin (h.phase)) * 0.9f * env * atk * h.vol;
+                out = std::tanh (2.6f * (float) std::sin (h.phase)) * 0.95f * env * atk * h.vol;
                 break;
             }
             case Perc:
@@ -252,14 +253,16 @@ private:
             {
                 h.phase += h.f0 / sampleRate;
                 if (h.phase >= 1.0) h.phase -= 1.0;
-                const float saw = (float) (h.phase * 2.0 - 1.0);
+                h.phase2 += h.f0 * 1.006 / sampleRate;
+                if (h.phase2 >= 1.0) h.phase2 -= 1.0;
+                const float saw = (float) ((h.phase * 2.0 - 1.0) * 0.6 + (h.phase2 * 2.0 - 1.0) * 0.4);
                 const float sub = (float) std::sin (twoPi * h.phase);
-                const float cut = h.lpCut0 * std::pow (h.lpCut1 / h.lpCut0, juce::jmin (1.0f, t / 0.9f));
+                const float cut = h.lpCut0 * std::pow (h.lpCut1 / h.lpCut0, juce::jmin (1.0f, t / 0.55f));
                 h.g = std::tan (juce::MathConstants<float>::pi * juce::jmin (cut, (float) sampleRate * 0.45f) / (float) sampleRate);
                 const float filtered = svfRun (h, saw);
                 const float a = juce::jmin (1.0f, (float) h.age / (0.004f * (float) sampleRate));
                 const float rel = t > 0.7f ? juce::jmax (0.0f, 1.0f - (t - 0.7f) / 0.3f) : 1.0f;
-                out = (filtered + sub * 0.6f) * a * rel * h.vol;
+                out = std::tanh ((filtered * 1.4f + sub * 0.7f)) * a * rel * h.vol;
                 break;
             }
         }
