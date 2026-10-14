@@ -228,7 +228,7 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     buffer.clear();
     keyState.processNextMidiBuffer (midi, 0, n, true);
     {
-        juce::MidiBuffer synthMidi;
+        synthMidi.clear();
         for (const auto meta : midi)
         {
             const auto msg = meta.getMessage();
@@ -263,11 +263,21 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     const float cutoff = prm ("cutoff");
     const float q = prm ("reso");
     ladder.setCutoffFrequencyHz (cutoff);
-    ladder.setResonance (juce::jmap (q, 0.7f, 14.0f, 0.05f, 0.92f));
+    ladder.setResonance (juce::jmap (q, 0.7f, 14.0f, 0.05f, 0.80f));
     {
         juce::dsp::AudioBlock<float> blk (buffer);
         juce::dsp::ProcessContextReplacing<float> ctx (blk);
         ladder.process (ctx);
+    }
+    // safety: a filter blow-up (NaN/inf) would otherwise silence everything until reload
+    {
+        bool bad = false;
+        for (int ch = 0; ch < 2 && ! bad; ++ch)
+        {
+            auto* d = buffer.getReadPointer (ch);
+            for (int i = 0; i < n; ++i) if (! std::isfinite (d[i]) || std::abs (d[i]) > 8.0f) { bad = true; break; }
+        }
+        if (bad) { ladder.reset(); reverb.reset(); limiter.reset(); buffer.clear(); }
     }
 
     // reverb (parallel wet)
@@ -344,7 +354,12 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         renderHitsOnly();
     }
 
-    buffer.applyGain (prm ("volume"));
+    { const float vol = prm ("volume"); buffer.applyGainRamp (0, n, lastVol, vol); lastVol = vol; }
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        auto* d = buffer.getWritePointer (ch);
+        for (int i = 0; i < n; ++i) d[i] = std::isfinite (d[i]) ? juce::jlimit (-4.0f, 4.0f, d[i]) : 0.0f;
+    }
     {
         juce::dsp::AudioBlock<float> blk (buffer);
         juce::dsp::ProcessContextReplacing<float> ctx (blk);

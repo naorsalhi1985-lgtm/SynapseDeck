@@ -33,7 +33,9 @@ public:
     void setStateInformation (const void*, int) override;
 
     juce::AudioProcessorValueTreeState apvts;
-juce::MidiKeyboardState keyState;
+    juce::MidiKeyboardState keyState;
+    juce::MidiBuffer synthMidi;
+    float lastVol = 0.8f;
 
     // preset table shared with the voices
     struct Preset { int w1, w2; float det; int oct; float sub; };   // wave: 0 saw, 1 square, 2 tri
