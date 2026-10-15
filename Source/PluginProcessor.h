@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <cstdint>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
 #include "DrumEngine.h"
@@ -54,6 +55,14 @@ public:
     juce::AudioBuffer<float> flangeBuf;
     int flangeW = 0;
     double flangeLfo = 0.0;
+
+    // melody generator + fills (audio thread)
+    void regenMelody (int seed, int density100);
+    int melPat[64];
+    int melSeed = -1, melDens = -1, melCur = -1, melOffAt = 0;
+    long long melLastStep = -1000000;
+    double melFree = 0.0;
+    static const int kScaleTab[4][7];
 
     // preset table shared with the voices
     struct Preset { int w1, w2; float det; int oct; float sub; };   // wave: 0 saw, 1 square, 2 tri

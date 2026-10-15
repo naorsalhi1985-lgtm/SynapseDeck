@@ -198,8 +198,55 @@ juce::AudioProcessorValueTreeState::ParameterLayout SynapseDeckProcessor::create
     p.push_back (std::make_unique<C> ("arpRange", "Arp Range", juce::StringArray { "1 oct", "2 oct", "3 oct" }, 1));
     const char* fxIds[] = { "fxPump", "fxStutter", "fxTrance", "fxTape", "fxPitchUp", "fxPitchDn", "fxLofi", "fxPhone", "fxSpace", "fxFlange", "fxMute" };
     for (auto* id : fxIds) p.push_back (std::make_unique<B> (id, id, false));
+    p.push_back (std::make_unique<B> ("melodyOn", "Melody", false));
+    p.push_back (std::make_unique<I> ("melodySeed", "Melody Seed", 0, 9999, 1));
+    p.push_back (std::make_unique<C> ("melodyScale", "Melody Scale", juce::StringArray { "Auto (Minor/Major)", "Ethnic (Phrygian Dom.)", "Harmonic Minor" }, 1));
+    p.push_back (std::make_unique<F> ("melodyDensity", "Melody Density", R (0.2f, 1.0f), 0.6f));
+    p.push_back (std::make_unique<B> ("fills", "Drum Fills", true));
 
     return { p.begin(), p.end() };
+}
+
+const int SynapseDeckProcessor::kScaleTab[4][7] = {
+    { 0, 2, 3, 5, 7, 8, 10 },   // natural minor
+    { 0, 2, 4, 5, 7, 9, 11 },   // major
+    { 0, 1, 4, 5, 7, 8, 10 },   // phrygian dominant (ethnic)
+    { 0, 2, 3, 5, 7, 8, 11 } }; // harmonic minor
+
+void SynapseDeckProcessor::regenMelody (int seed, int density100)
+{
+    juce::Random r (seed * 7919 + 17);
+    const float dens = (float) density100 / 100.0f;
+    auto genBar = [&] (int* out)
+    {
+        int deg = r.nextInt (3) * 2;
+        for (int st = 0; st < 16; ++st)
+        {
+            const bool strong = (st == 0 || st == 3 || st == 6 || st == 8 || st == 10 || st == 12 || st == 14);
+            const float prob = (strong ? 0.55f : 0.30f) + dens * 0.5f - 0.15f;
+            if (st == 0) { out[st] = deg; continue; }
+            if (r.nextFloat() < prob)
+            {
+                int stepSz = r.nextInt (5) - 2;
+                if (stepSz == 0) stepSz = r.nextBool() ? 1 : -1;
+                deg = juce::jlimit (0, 9, deg + stepSz);
+                if (r.nextFloat() < 0.12f) deg = r.nextBool() ? 0 : 4;
+                out[st] = deg;
+            }
+            else out[st] = -1;
+        }
+    };
+    int a[16], b[16];
+    genBar (a); genBar (b);
+    for (int st = 0; st < 16; ++st)
+    {
+        melPat[st] = a[st];
+        melPat[16 + st] = b[st];
+        melPat[32 + st] = (a[st] >= 0 && r.nextFloat() < 0.2f) ? juce::jlimit (0, 9, a[st] + (r.nextBool() ? 2 : -2)) : a[st];
+        melPat[48 + st] = b[st];
+    }
+    // transition run at the end of the 4-bar phrase
+    melPat[60] = 3; melPat[61] = 4; melPat[62] = 6; melPat[63] = 7;
 }
 
 SynapseDeckProcessor::SynapseDeckProcessor()
@@ -244,6 +291,8 @@ void SynapseDeckProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     flangeBuf.clear();
     flangeW = 0;
     heldNotes.clear(); arpCur = -1; arpCounter = 0.0;
+    melSeed = -1; melDens = -1; melCur = -1; melOffAt = 0; melLastStep = -1000000; melFree = 0.0;
+    for (int i = 0; i < 64; ++i) melPat[i] = -1;
 }
 
 void SynapseDeckProcessor::runArp (juce::MidiBuffer& in, juce::MidiBuffer& out, int n, double bpm, int rate, int pat, int range)
@@ -365,6 +414,80 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     {
         if (arpCur >= 0) midi.addEvent (juce::MidiMessage::noteOff (1, arpCur), 0);
         arpCur = -1; heldNotes.clear();
+    }
+
+    // ---- melody generator + drum fills ----
+    {
+        const bool melOn = prm ("melodyOn") > 0.5f;
+        const bool fillOn = prm ("fills") > 0.5f && prm ("drums") > 0.5f;
+        bool runM = false;
+        double sp = 0.0;
+        if (melOn || fillOn)
+        {
+            if (auto* phM = getPlayHead())
+                if (auto posM = phM->getPosition())
+                    if (posM->getIsPlaying())
+                        if (auto qM = posM->getPpqPosition()) { sp = *qM * 4.0; runM = true; }
+            if (! runM && prm ("freeRun") > 0.5f)
+            {
+                sp = melFree;
+                melFree += n * juce::jmax (40.0, curBpm) / 60.0 * 4.0 / sr;
+                runM = true;
+            }
+        }
+        if (runM)
+        {
+            const int sc = (int) prm ("melodyScale");
+            const int seed = (int) prm ("melodySeed");
+            const int dens = (int) std::round (prm ("melodyDensity") * 100.0f);
+            if (seed != melSeed || dens != melDens) { regenMelody (seed, dens); melSeed = seed; melDens = dens; }
+            const int tab = sc == 1 ? 2 : sc == 2 ? 3 : (prm ("scaleMinor") > 0.5f ? 0 : 1);
+            const int base = 12 * ((int) prm ("octave") + 2) + (int) prm ("bassRoot");
+            const double sps = juce::jmax (40.0, curBpm) / 60.0 * 4.0 / sr;
+            const double s1 = sp + n * sps;
+            for (long long k = (long long) std::ceil (sp - 1e-9); (double) k < s1; ++k)
+            {
+                if (k < 0 || k == melLastStep) continue;
+                melLastStep = k;
+                const int off = juce::jlimit (0, n - 1, (int) ((double) (k - (long long) std::floor (sp)) / sps - (sp - std::floor (sp)) / sps));
+                const int stp = (int) (k % 64);
+                const int sib = (int) (k % 16);
+                const int barN = (int) (k / 16);
+                if (melOn)
+                {
+                    if (melCur >= 0) { midi.addEvent (juce::MidiMessage::noteOff (1, melCur), off); melCur = -1; }
+                    const int d = melPat[stp];
+                    if (d >= 0)
+                    {
+                        const int note = juce::jlimit (0, 127, base + kScaleTab[tab][d % 7] + 12 * (d / 7));
+                        const bool strong = (sib % 4 == 0);
+                        midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) (strong ? 108 : 86)), off);
+                        melCur = note;
+                        melOffAt = off + (int) (0.7 / sps);
+                    }
+                }
+                if (fillOn)
+                {
+                    const int b4 = barN % 4, b8 = barN % 8;
+                    const bool big = (b8 == 7 && sib >= 8), small = (b4 == 3 && sib >= 12);
+                    if (big || small)
+                    {
+                        const int idx = big ? sib - 8 : sib - 12;
+                        const int total = big ? 8 : 4;
+                        const float vel = 0.45f + 0.5f * (float) idx / (float) total;
+                        drums.hitNote ((idx & 1) ? 39 : 45, off, vel);
+                        if (big && idx >= 4) drums.hitNote (45, off, vel);
+                    }
+                    if (sib == 0 && b4 == 0 && barN > 0) { drums.hitNote (51, off, 1.0f); drums.hitNote (46, off, 0.9f); }
+                }
+            }
+            if (melCur >= 0)
+            {
+                if (melOffAt < n) { midi.addEvent (juce::MidiMessage::noteOff (1, melCur), juce::jmax (0, melOffAt)); melCur = -1; }
+                else melOffAt -= n;
+            }
+        }
+        else if (melCur >= 0) { midi.addEvent (juce::MidiMessage::noteOff (1, melCur), 0); melCur = -1; }
     }
 
     // ---- synth ----
