@@ -60,6 +60,131 @@ struct OrbPad : public juce::Component, private juce::Timer
     }
     void paint (juce::Graphics& g) override
     {
+        auto b = getLocalBounds().toFloat();
+        g.setColour (juce::Colour (0x44ffffff));
+        for (float x = b.getX() + 14.0f; x < b.getRight() - 14.0f; x += 9.0f)
+            g.fillRect (x, b.getBottom() - 30.0f, 4.0f, 1.2f);
+        auto p = orbPos();
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0x66ff4fd8), p.x, p.y, juce::Colours::transparentBlack, p.x + 90.0f, p.y, true));
+        g.fillEllipse (p.x - 90.0f, p.y - 90.0f, 180.0f, 180.0f);
+        for (int i = 0; i < 48; ++i)
+        {
+            const float a = juce::MathConstants<float>::twoPi * (float) i / 48.0f;
+            g.setColour (juce::Colour (0xff30e0d0).withAlpha (i % 2 ? 0.9f : 0.5f));
+            g.fillEllipse (p.x + 40.0f * std::cos (a) - 1.6f, p.y + 40.0f * std::sin (a) - 1.6f, 3.2f, 3.2f);
+        }
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff8fe0), p.x - 12.0f, p.y - 14.0f, juce::Colour (0xff6a2fd0), p.x + 30.0f, p.y + 30.0f, true));
+        g.fillEllipse (p.x - 32.0f, p.y - 32.0f, 64.0f, 64.0f);
+        g.setColour (juce::Colour (0x99ffffff));
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawText ("drag: cutoff  /  reso", getLocalBounds().removeFromBottom (24), juce::Justification::centred);
+    }
+    void setFromMouse (const juce::MouseEvent& e)
+    {
+        auto b = getLocalBounds().toFloat();
+        const float cx = juce::jlimit (0.0f, 1.0f, (e.position.x - b.getX() - 60.0f) / (b.getWidth() - 120.0f));
+        const float ry = juce::jlimit (0.0f, 1.0f, 1.0f - (e.position.y - b.getY() - 40.0f) / (b.getHeight() - 110.0f));
+        apvts.getParameter ("cutoff")->setValueNotifyingHost (cx);
+        apvts.getParameter ("reso")->setValueNotifyingHost (ry);
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        apvts.getParameter ("cutoff")->beginChangeGesture(); apvts.getParameter ("reso")->beginChangeGesture(); setFromMouse (e);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override { setFromMouse (e); }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        apvts.getParameter ("cutoff")->endChangeGesture(); apvts.getParameter ("reso")->endChangeGesture();
+    }
+    juce::AudioProcessorValueTreeState& apvts;
+};
+
+struct EnvView : public juce::Component, private juce::Timer
+{
+    explicit EnvView (juce::AudioProcessorValueTreeState& s) : apvts (s) { startTimerHz (20); }
+    void timerCallback() override { repaint(); }
+    void paint (juce::Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat().reduced (6.0f, 18.0f);
+        const float a = *apvts.getRawParameterValue ("attack"), d = *apvts.getRawParameterValue ("decay"),
+                    s = *apvts.getRawParameterValue ("sustain"), r = *apvts.getRawParameterValue ("release");
+        const float hold = 0.6f, total = a + d + hold + r;
+        const float x0 = b.getX(), x1 = x0 + b.getWidth() * a / total, x2 = x1 + b.getWidth() * d / total,
+                    x3 = x2 + b.getWidth() * hold / total, x4 = b.getRight();
+        const float yb = b.getBottom(), yt = b.getY(), ys = yb - s * (yb - yt);
+        juce::Path path;
+        path.startNewSubPath (x0, yb); path.lineTo (x1, yt); path.lineTo (x2, ys); path.lineTo (x3, ys); path.lineTo (x4, yb);
+        juce::Path fillP (path); fillP.closeSubPath();
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0x887a40ff), 0.0f, yt, juce::Colour (0x112020a0), 0.0f, yb, false));
+        g.fillPath (fillP);
+        g.setColour (juce::Colour (0xffff9a3c));
+        g.strokePath (path, juce::PathStrokeType (2.2f));
+        g.setColour (juce::Colour (0xaaffffff));
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText ("A " + juce::String ((int) (a * 1000.0f)) + " MS   R " + juce::String (r, 2) + " S",
+                    getLocalBounds().removeFromTop (16), juce::Justification::right);
+    }
+    juce::AudioProcessorValueTreeState& apvts;
+};
+
+class SynapseDeckEditor : public juce::AudioProcessorEditor
+{
+public:
+    explicit SynapseDeckEditor (SynapseDeckProcessor& p)
+        : juce::AudioProcessorEditor (p), proc (p), orb (p.apvts), envView (p.apvts),
+          keys (p.keyState, juce::MidiKeyboardComponent::horizontalKeyboard)
+    {
+        setLookAndFeel (&look);
+        bgImage = juce::ImageFileFormat::loadFrom (BgData::data, (size_t) BgData::size);
+
+        addKnob ("cutoff", "CUTOFF", 0xffffd21f, " Hz");
+        addKnob ("reso", "RESO", 0xffff5fa8, "");
+        addKnob ("reverb", "REVERB", 0xffff4fd8, "");
+        addKnob ("width", "WIDTH", 0xffa070ff, " ct");
+        addKnob ("volume", "VOLUME", 0xfff0e040, "");
+        addKnob ("attack", "ATTACK", 0xffa070ff, " s");
+        addKnob ("decay", "DECAY", 0xffff5f90, " s");
+        addKnob ("sustain", "SUSTAIN", 0xffff5f90, "");
+        addKnob ("release", "RELEASE", 0xffff9a3c, " s");
+        addKnob ("sub", "SUB", 0xff30e0d0, "");
+        addKnob ("drive", "DRIVE", 0xffffd21f, "");
+        addKnob ("sidechain", "SIDECHAIN", 0xff5fd0ff, "");
+        addKnob ("unison", "VOICES", 0xffa0ff70, "");
+        addKnob ("drumLevel", "DRUM LVL", 0xffff7040, "");
+
+        addCombo (preset, presetA, "preset");
+        addCombo (style, styleA, "style");
+        addCombo (root, rootA, "bassRoot");
+        addToggle (drumsB, drumsA, "drums", "DRUMS");
+        addToggle (bassB, bassA, "bass", "ROLLING BASS");
+        addToggle (freeB, freeA, "freeRun", "FREE RUN");
+        expDrums.setButtonText ("EXPORT DRUMS MIDI");
+        expBass.setButtonText ("EXPORT BASS MIDI");
+        expDrums.onClick = [this] { exportMidi (true); };
+        expBass.onClick  = [this] { exportMidi (false); };
+        addAndMakeVisible (expDrums);
+        addAndMakeVisible (expBass);
+
+        keys.setKeyWidth (46.0f);
+        keys.setAvailableRange (36, 96);
+        keys.setScrollButtonsVisible (false);
+        keys.setLowestVisibleKey (48);
+        keys.setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour (0xfff2eaff));
+        keys.setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour (0xff160c2a));
+        keys.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour (0xaaff9a3c));
+        addAndMakeVisible (keys);
+        addAndMakeVisible (orb);
+        addAndMakeVisible (envView);
+        prevB.setButtonText ("<"); nextB.setButtonText (">");
+        prevB.onClick = [this] { int n = preset.getSelectedId() - 1; if (n < 1) n = preset.getNumItems(); preset.setSelectedId (n); };
+        nextB.onClick = [this] { int n = preset.getSelectedId() + 1; if (n > preset.getNumItems()) n = 1; preset.setSelectedId (n); };
+        addAndMakeVisible (prevB); addAndMakeVisible (nextB);
+        setSize (1200, 720);
+    }
+    ~SynapseDeckEditor() override { setLookAndFeel (nullptr); }
+
+    void paint (juce::Graphics& g) override
+    {
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1a0b3a), 0.0f, 0.0f, juce::Colour (0xff04101e), 0.0f, (float) getHeight(), false));
         g.fillAll();
         if (bgImage.isValid())
