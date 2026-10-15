@@ -207,6 +207,9 @@ SynapseDeckProcessor::SynapseDeckProcessor()
       apvts (*this, nullptr, "STATE", createLayout())
 {
     for (int i = 0; i < 128; ++i) noteMap[i] = i;
+    heldNotes.reserve (256);
+    seq.reserve (1024);
+    arpOut.ensureSize (8192);
     synth.addSound (new SynthSound());
     for (int i = 0; i < 12; ++i)
         synth.addVoice (new SynapseVoice (apvts));
