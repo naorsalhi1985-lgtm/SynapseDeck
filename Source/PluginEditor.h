@@ -263,7 +263,7 @@ public:
         addToggle (melodyB, melodyA, "melodyOn", "MELODY");
         addToggle (fillsB, fillsA, "fills", "DRUM FILLS");
         addCombo (melScale, melScaleA, "melodyScale");
-        genB.setButtonText ("GENERATE");
+        genB.setButtonText ("NEW MELODY");
         genB.onClick = [this]
         {
             auto* prm = proc.apvts.getParameter ("melodySeed");
@@ -278,9 +278,11 @@ public:
         densS.setColour (juce::Slider::thumbColourId, juce::Colours::white);
         densA = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "melodyDensity", densS);
         addAndMakeVisible (densS);
-        expMel.setButtonText ("EXPORT MELODY MIDI");
-        expMel.onClick = [this] { exportMelody(); };
-        addAndMakeVisible (expMel);
+        barsC.addItem ("4 bars", 4); barsC.addItem ("8 bars", 8); barsC.addItem ("16 bars", 16); barsC.addItem ("32 bars", 32);
+        barsC.setSelectedId (8, juce::dontSendNotification);
+        addAndMakeVisible (barsC);
+        dragPad.onDragStart = [this] { return exportMelody(); };
+        addAndMakeVisible (dragPad);
         expDrums.setButtonText ("EXPORT DRUMS MIDI");
         expBass.setButtonText ("EXPORT BASS MIDI");
         expDrums.onClick = [this] { exportMidi (true); };
@@ -421,12 +423,13 @@ public:
         freeB.setBounds (680, 514, 120, 34);
         expDrums.setBounds (830, 514, 160, 34);
         expBass.setBounds (1000, 514, 160, 34);
-        melodyB.setBounds (34, 560, 120, 34);
-        genB.setBounds (164, 560, 120, 34);
-        melScale.setBounds (294, 560, 210, 34);
-        densS.setBounds (516, 560, 180, 34);
-        fillsB.setBounds (710, 560, 130, 34);
-        expMel.setBounds (850, 560, 200, 34);
+        melodyB.setBounds (34, 560, 100, 34);
+        genB.setBounds (144, 560, 160, 34);
+        dragPad.setBounds (314, 560, 270, 34);
+        barsC.setBounds (594, 560, 80, 34);
+        melScale.setBounds (684, 560, 180, 34);
+        densS.setBounds (874, 560, 110, 34);
+        fillsB.setBounds (994, 560, 140, 34);
         keys.setBounds (32, 612, 1136, 126);
     }
 
@@ -469,14 +472,19 @@ private:
         addAndMakeVisible (b);
     }
 
-    void exportMelody()
+    juce::File exportMelody()
     {
         auto& av = proc.apvts;
+        {
+            const int seed = (int) *av.getRawParameterValue ("melodySeed");
+            const int dens = (int) std::round (*av.getRawParameterValue ("melodyDensity") * 100.0f);
+            if (seed != proc.melSeed || dens != proc.melDens) { proc.regenMelody (seed, dens); proc.melSeed = seed; proc.melDens = dens; }
+        }
         const int tab = [&] { const int sc = (int) *av.getRawParameterValue ("melodyScale");
                               return sc == 1 ? 2 : sc == 2 ? 3 : (*av.getRawParameterValue ("scaleMinor") > 0.5f ? 0 : 1); }();
         const int base = 12 * ((int) *av.getRawParameterValue ("octave") + 2) + (int) *av.getRawParameterValue ("bassRoot");
         const int styleIdx = juce::jlimit (0, 11, (int) *av.getRawParameterValue ("style"));
-        const int ppq = 480, stepTicks = ppq / 4, bars = 16;
+        const int ppq = 480, stepTicks = ppq / 4, bars = juce::jmax (1, barsC.getSelectedId());
         juce::MidiMessageSequence seq;
         seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) (60000000.0 / kStyles[styleIdx].bpm)), 0.0);
         for (int s = 0; s < bars * 16; ++s)
@@ -494,11 +502,13 @@ private:
         mf.addTrack (seq);
         auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("SynapseDeck");
         dir.createDirectory();
-        auto f = dir.getChildFile ("Melody " + juce::String (proc.melSeed) + ".mid");
+        auto f = dir.getChildFile ("Melody " + juce::String (proc.melSeed) + " (" + juce::String (bars) + " bars).mid");
         f.deleteFile();
-        juce::FileOutputStream os (f);
-        if (os.openedOk()) { mf.writeTo (os); os.flush(); }
-        f.revealToUser();
+        {
+            juce::FileOutputStream os (f);
+            if (os.openedOk()) { mf.writeTo (os); os.flush(); }
+        }
+        return f;
     }
 
     void exportMidi (bool drumsFile)
@@ -560,7 +570,32 @@ private:
     juce::ComboBox preset, style, root;
     juce::ToggleButton drumsB, bassB, freeB;
     juce::ToggleButton expDrums, expBass, melodyB, fillsB;
-    juce::TextButton genB, expMel;
+    juce::TextButton genB;
+    juce::ComboBox barsC;
+    struct DragPad : public juce::Component
+    {
+        std::function<juce::File()> onDragStart;
+        bool dragging = false;
+        void paint (juce::Graphics& g) override
+        {
+            auto r = getLocalBounds().toFloat().reduced (1.0f);
+            g.setColour (juce::Colour (0xff2a1a4a)); g.fillRoundedRectangle (r, 8.0f);
+            g.setColour (juce::Colour (0xffff9a3c)); g.drawRoundedRectangle (r, 8.0f, 1.5f);
+            g.setColour (juce::Colours::white); g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+            g.drawText (juce::String::fromUTF8 ("\xe2\x87\xa9  DRAG MELODY TO CUBASE TRACK"), getLocalBounds(), juce::Justification::centred);
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (dragging || e.getDistanceFromDragStart() < 6 || onDragStart == nullptr) return;
+            dragging = true;
+            auto f = onDragStart();
+            if (f.existsAsFile())
+                juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this, [this] { dragging = false; });
+            else dragging = false;
+        }
+        void mouseUp (const juce::MouseEvent&) override { dragging = false; }
+        void mouseMove (const juce::MouseEvent&) override { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
+    } dragPad;
     juce::ComboBox melScale;
     juce::Slider densS;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> melodyA, fillsA;
