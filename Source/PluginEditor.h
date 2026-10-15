@@ -55,56 +55,17 @@ struct DeckLook : public juce::LookAndFeel_V4
     }
 };
 
-class SynapseDeckEditor : public juce::AudioProcessorEditor
+struct OrbPad : public juce::Component, private juce::Timer
 {
-public:
-    explicit SynapseDeckEditor (SynapseDeckProcessor& p)
-        : juce::AudioProcessorEditor (p), proc (p),
-          keys (p.keyState, juce::MidiKeyboardComponent::horizontalKeyboard)
+    explicit OrbPad (juce::AudioProcessorValueTreeState& s) : apvts (s) { startTimerHz (30); }
+    void timerCallback() override { repaint(); }
+    juce::Point<float> orbPos() const
     {
-        setLookAndFeel (&look);
-        bgImage = juce::ImageFileFormat::loadFrom (BgData::data, (size_t) BgData::size);
-
-        addKnob ("cutoff", "CUTOFF", 0xffffd21f, " Hz");
-        addKnob ("reso", "RESO", 0xffff5fa8, "");
-        addKnob ("reverb", "REVERB", 0xffff4fd8, "");
-        addKnob ("width", "WIDTH", 0xffa070ff, " ct");
-        addKnob ("volume", "VOLUME", 0xfff0e040, "");
-        addKnob ("attack", "ATTACK", 0xffa070ff, " s");
-        addKnob ("decay", "DECAY", 0xffff5f90, " s");
-        addKnob ("sustain", "SUSTAIN", 0xffff5f90, "");
-        addKnob ("release", "RELEASE", 0xffff9a3c, " s");
-        addKnob ("sub", "SUB", 0xff30e0d0, "");
-        addKnob ("drive", "DRIVE", 0xffffd21f, "");
-        addKnob ("sidechain", "SIDECHAIN", 0xff5fd0ff, "");
-        addKnob ("unison", "VOICES", 0xffa0ff70, "");
-        addKnob ("drumLevel", "DRUM LVL", 0xffff7040, "");
-
-        addCombo (preset, presetA, "preset");
-        addCombo (style, styleA, "style");
-        addCombo (root, rootA, "bassRoot");
-        addToggle (drumsB, drumsA, "drums", "DRUMS");
-        addToggle (bassB, bassA, "bass", "ROLLING BASS");
-        addToggle (freeB, freeA, "freeRun", "FREE RUN");
-        expDrums.setButtonText ("EXPORT DRUMS MIDI");
-        expBass.setButtonText ("EXPORT BASS MIDI");
-        expDrums.onClick = [this] { exportMidi (true); };
-        expBass.onClick  = [this] { exportMidi (false); };
-        addAndMakeVisible (expDrums);
-        addAndMakeVisible (expBass);
-
-        keys.setKeyWidth (46.0f);
-        keys.setAvailableRange (36, 96);
-        keys.setScrollButtonsVisible (false);
-        keys.setLowestVisibleKey (48);
-        keys.setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour (0xfff2eaff));
-        keys.setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour (0xff160c2a));
-        keys.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colour (0xaaff9a3c));
-        addAndMakeVisible (keys);
-        setSize (1040, 640);
+        auto b = getLocalBounds().toFloat();
+        const float cx = apvts.getParameter ("cutoff")->getValue();
+        const float ry = apvts.getParameter ("reso")->getValue();
+        return { b.getX() + 60.0f + cx * (b.getWidth() - 120.0f), b.getY() + 40.0f + (1.0f - ry) * (b.getHeight() - 110.0f) };
     }
-    ~SynapseDeckEditor() override { setLookAndFeel (nullptr); }
-
     void paint (juce::Graphics& g) override
     {
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1a0b3a), 0.0f, 0.0f, juce::Colour (0xff04101e), 0.0f, (float) getHeight(), false));
@@ -112,60 +73,57 @@ public:
         if (bgImage.isValid())
         {
             g.drawImage (bgImage, getLocalBounds().toFloat());
-            g.setColour (juce::Colour (0x66050212));
+            g.setColour (juce::Colour (0x55050212));
             g.fillAll();
         }
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0x55ff4fd8), 200.0f, 150.0f, juce::Colours::transparentBlack, 520.0f, 400.0f, true));
-        g.fillAll();
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0x4430e0d0), 860.0f, 330.0f, juce::Colours::transparentBlack, 1100.0f, 600.0f, true));
-        g.fillAll();
         g.setColour (juce::Colours::white);
-        g.setFont (juce::FontOptions (34.0f, juce::Font::bold));
-        g.drawText ("SYNAPSE", 28, 14, 170, 40, juce::Justification::left);
+        g.setFont (juce::FontOptions (36.0f, juce::Font::bold));
+        g.drawText ("SYNAPSE", 28, 14, 190, 44, juce::Justification::left);
         g.setColour (juce::Colour (0xffff9a3c));
-        g.drawText ("DECK", 190, 14, 100, 40, juce::Justification::left);
+        g.drawText ("DECK", 206, 14, 110, 44, juce::Justification::left);
         g.setColour (juce::Colour (0xaaffffff));
-        g.setFont (juce::FontOptions (12.0f));
-        g.drawText ("chords / arp / fx / pads  -  psy / goa engine", 30, 52, 400, 16, juce::Justification::left);
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawText ("psy / goa engine  -  drums / rolling bass / synth", 30, 56, 420, 16, juce::Justification::left);
 
         auto panel = [&] (juce::Rectangle<int> r, const char* t)
         {
-            g.setColour (juce::Colour (0x8c0a0418)); g.fillRoundedRectangle (r.toFloat(), 14.0f);
-            g.setColour (juce::Colour (0x44ffffff)); g.drawRoundedRectangle (r.toFloat(), 14.0f, 1.0f);
-            g.setColour (juce::Colour (0xffb070ff)); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-            g.drawText (t, r.getX() + 14, r.getY() + 6, 200, 16, juce::Justification::left);
+            g.setColour (juce::Colour (0x990a0418)); g.fillRoundedRectangle (r.toFloat(), 14.0f);
+            g.setColour (juce::Colour (0x33ffffff)); g.drawRoundedRectangle (r.toFloat(), 14.0f, 1.0f);
+            g.setColour (juce::Colour (0xffb070ff)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+            g.drawText (t, r.getX() + 16, r.getY() + 8, 240, 14, juce::Justification::left);
         };
-        panel ({ 20, 84, 1000, 190 }, "SOUND");
-        panel ({ 20, 284, 1000, 190 }, "ENVELOPE / ENGINE");
-        panel ({ 20, 484, 1000, 140 }, "KEYS");
+        panel ({ 20, 84, 580, 216 }, "SYNTH");
+        panel ({ 620, 84, 560, 216 }, "ENVELOPE");
+        panel ({ 20, 312, 1160, 128 }, "SOUND");
+        panel ({ 20, 452, 1160, 56 }, "");
+        panel ({ 20, 520, 1160, 180 }, "KEYS");
 
         g.setColour (juce::Colours::white);
-        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
         for (auto& k : knobs)
-            g.drawText (k->label, k->s.getX() - 10, k->s.getBottom() - 4, k->s.getWidth() + 20, 16, juce::Justification::centred);
+            g.drawText (k->label, k->s.getX() - 10, k->s.getBottom() - 6, k->s.getWidth() + 20, 16, juce::Justification::centred);
     }
 
     void resized() override
     {
-        preset.setBounds (360, 18, 300, 38);
-        const char* r1[] = { "cutoff", "reso", "reverb", "width", "volume", "sub", "drive" };
-        const char* r2[] = { "attack", "decay", "sustain", "release", "sidechain", "unison", "drumLevel" };
-        auto place = [&] (const char** ids, int y)
-        {
-            for (int i = 0; i < 7; ++i)
-                for (auto& k : knobs)
-                    if (k->id == ids[i]) k->s.setBounds (50 + i * 135, y, 100, 100);
-        };
-        place (r1, 112);
-        place (r2, 312);
-        style.setBounds (30, 436, 200, 30);
-        root.setBounds (240, 436, 90, 30);
-        drumsB.setBounds (350, 436, 120, 30);
-        bassB.setBounds (480, 436, 150, 30);
-        freeB.setBounds (640, 436, 100, 30);
-        expDrums.setBounds (750, 436, 130, 30);
-        expBass.setBounds (890, 436, 130, 30);
-        keys.setBounds (32, 506, 976, 106);
+        preset.setBounds (440, 20, 330, 40);
+        prevB.setBounds (396, 22, 36, 36);
+        nextB.setBounds (778, 22, 36, 36);
+        orb.setBounds (30, 104, 560, 190);
+        envView.setBounds (630, 104, 540, 190);
+        const char* ids[] = { "cutoff", "reso", "reverb", "width", "volume", "sub", "drive",
+                              "attack", "decay", "sustain", "release", "sidechain", "unison", "drumLevel" };
+        for (int i = 0; i < 14; ++i)
+            for (auto& k : knobs)
+                if (k->id == ids[i]) k->s.setBounds (30 + i * 82, 330, 80, 80);
+        style.setBounds (34, 463, 220, 34);
+        root.setBounds (264, 463, 90, 34);
+        drumsB.setBounds (370, 463, 130, 34);
+        bassB.setBounds (510, 463, 160, 34);
+        freeB.setBounds (680, 463, 120, 34);
+        expDrums.setBounds (830, 463, 160, 34);
+        expBass.setBounds (1000, 463, 160, 34);
+        keys.setBounds (32, 548, 1136, 142);
     }
 
 private:
@@ -252,6 +210,9 @@ private:
     SynapseDeckProcessor& proc;
     DeckLook look;
     juce::Image bgImage;
+    OrbPad orb;
+    EnvView envView;
+    juce::TextButton prevB, nextB;
     std::vector<std::unique_ptr<Knob>> knobs;
     juce::ComboBox preset, style, root;
     juce::ToggleButton drumsB, bassB, freeB;
