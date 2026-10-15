@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <cstdint>
+#include <atomic>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
 #include "DrumEngine.h"
@@ -61,6 +62,8 @@ public:
     int melPat[64];
     int melSeed = -1, melDens = -1, melCur = -1, melOffAt = 0;
     long long melLastStep = -1000000;
+    std::atomic<bool> melPreview { false };
+    bool melPvWas = false;
     double melFree = 0.0;
     static const int kScaleTab[4][7];
 

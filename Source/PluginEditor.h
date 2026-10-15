@@ -272,6 +272,12 @@ public:
             prm->endChangeGesture();
         };
         addAndMakeVisible (genB);
+        listenB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb6 LISTEN"));
+        listenB.setClickingTogglesState (true);
+        listenB.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff7CFF3A));
+        listenB.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        listenB.onClick = [this] { proc.melPreview = listenB.getToggleState(); };
+        addAndMakeVisible (listenB);
         densS.setSliderStyle (juce::Slider::LinearHorizontal);
         densS.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         densS.setColour (juce::Slider::trackColourId, juce::Colour (0xffff9a3c));
@@ -344,7 +350,7 @@ public:
         timerCallback();
         setSize (1200, 770);
     }
-    ~SynapseDeckEditor() override { setLookAndFeel (nullptr); }
+    ~SynapseDeckEditor() override { proc.melPreview = false; setLookAndFeel (nullptr); }
 
     void timerCallback() override
     {
@@ -424,12 +430,13 @@ public:
         expDrums.setBounds (830, 514, 160, 34);
         expBass.setBounds (1000, 514, 160, 34);
         melodyB.setBounds (34, 560, 100, 34);
-        genB.setBounds (144, 560, 160, 34);
-        dragPad.setBounds (314, 560, 270, 34);
-        barsC.setBounds (594, 560, 80, 34);
-        melScale.setBounds (684, 560, 180, 34);
-        densS.setBounds (874, 560, 110, 34);
-        fillsB.setBounds (994, 560, 140, 34);
+        genB.setBounds (144, 560, 140, 34);
+        listenB.setBounds (294, 560, 100, 34);
+        dragPad.setBounds (404, 560, 230, 34);
+        barsC.setBounds (644, 560, 70, 34);
+        melScale.setBounds (724, 560, 160, 34);
+        densS.setBounds (894, 560, 100, 34);
+        fillsB.setBounds (1004, 560, 140, 34);
         keys.setBounds (32, 612, 1136, 126);
     }
 
@@ -570,7 +577,7 @@ private:
     juce::ComboBox preset, style, root;
     juce::ToggleButton drumsB, bassB, freeB;
     juce::ToggleButton expDrums, expBass, melodyB, fillsB;
-    juce::TextButton genB;
+    juce::TextButton genB, listenB;
     juce::ComboBox barsC;
     struct DragPad : public juce::Component
     {

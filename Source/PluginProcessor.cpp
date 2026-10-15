@@ -418,7 +418,13 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     // ---- melody generator + drum fills ----
     {
-        const bool melOn = prm ("melodyOn") > 0.5f;
+        const bool pv = melPreview.load();
+        if (pv != melPvWas)
+        {
+            melPvWas = pv; melFree = 0.0; melLastStep = -1000000;
+            if (! pv) { midi.addEvent (juce::MidiMessage::allNotesOff (1), 0); melCur = -1; }
+        }
+        const bool melOn = prm ("melodyOn") > 0.5f || pv;
         const bool fillOn = prm ("fills") > 0.5f && prm ("drums") > 0.5f;
         bool runM = false;
         double sp = 0.0;
@@ -428,7 +434,7 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 if (auto posM = phM->getPosition())
                     if (posM->getIsPlaying())
                         if (auto qM = posM->getPpqPosition()) { sp = *qM * 4.0; runM = true; }
-            if (! runM && prm ("freeRun") > 0.5f)
+            if (! runM && (prm ("freeRun") > 0.5f || pv))
             {
                 sp = melFree;
                 melFree += n * juce::jmax (40.0, curBpm) / 60.0 * 4.0 / sr;
