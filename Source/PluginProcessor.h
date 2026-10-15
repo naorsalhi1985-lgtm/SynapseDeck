@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
 #include "DrumEngine.h"
@@ -36,6 +37,23 @@ public:
     juce::MidiKeyboardState keyState;
     juce::MidiBuffer synthMidi;
     float lastVol = 0.8f;
+
+    // arpeggiator + fx state (audio thread)
+    void runArp (juce::MidiBuffer& in, juce::MidiBuffer& out, int n, double bpm, int rate, int pat, int range);
+    juce::MidiBuffer arpOut;
+    std::vector<int> heldNotes, seq;
+    int arpCur = -1, arpIdx = 0;
+    double arpCounter = 0.0, arpOffCounter = 0.0;
+    juce::Random arpRng;
+    int noteMap[128];
+    double fxBeat = 0.0;
+    float fxGainS = 1.0f, tapeLvl = 1.0f, muteS = 1.0f;
+    float lofiHold[2] = { 0.0f, 0.0f };
+    int lofiCnt = 0;
+    float phoneLp[2] = { 0.0f, 0.0f }, phoneHp[2] = { 0.0f, 0.0f };
+    juce::AudioBuffer<float> flangeBuf;
+    int flangeW = 0;
+    double flangeLfo = 0.0;
 
     // preset table shared with the voices
     struct Preset { int w1, w2; float det; int oct; float sub; };   // wave: 0 saw, 1 square, 2 tri

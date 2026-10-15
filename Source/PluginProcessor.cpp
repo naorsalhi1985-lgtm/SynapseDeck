@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include <algorithm>
 #include "PluginEditor.h"
 
 const SynapseDeckProcessor::Preset SynapseDeckProcessor::kPresets[4] = {
@@ -154,6 +155,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SynapseDeckProcessor::create
     using C = juce::AudioParameterChoice;
     using B = juce::AudioParameterBool;
     using R = juce::NormalisableRange<float>;
+    using I = juce::AudioParameterInt;
 
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
 
@@ -188,6 +190,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SynapseDeckProcessor::create
     p.push_back (std::make_unique<B> ("freeRun", "Drums Free Run", false));
     p.push_back (std::make_unique<F> ("freeBpm", "Free Run Tempo", R (70.0f, 180.0f, 1.0f), 142.0f));
 
+    p.push_back (std::make_unique<B> ("scaleMinor", "Scale Minor", true));
+    p.push_back (std::make_unique<I> ("octave", "Octave", 1, 6, 3));
+    p.push_back (std::make_unique<B> ("arpOn", "Arp", false));
+    p.push_back (std::make_unique<C> ("arpRate", "Arp Rate", juce::StringArray { "1/8", "1/16" }, 1));
+    p.push_back (std::make_unique<C> ("arpPattern", "Arp Pattern", juce::StringArray { "UP", "DN", "U/D", "RND" }, 0));
+    p.push_back (std::make_unique<C> ("arpRange", "Arp Range", juce::StringArray { "1 oct", "2 oct", "3 oct" }, 1));
+    const char* fxIds[] = { "fxPump", "fxStutter", "fxTrance", "fxTape", "fxPitchUp", "fxPitchDn", "fxLofi", "fxPhone", "fxSpace", "fxFlange", "fxMute" };
+    for (auto* id : fxIds) p.push_back (std::make_unique<B> (id, id, false));
+
     return { p.begin(), p.end() };
 }
 
@@ -195,6 +206,7 @@ SynapseDeckProcessor::SynapseDeckProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "STATE", createLayout())
 {
+    for (int i = 0; i < 128; ++i) noteMap[i] = i;
     synth.addSound (new SynthSound());
     for (int i = 0; i < 12; ++i)
         synth.addVoice (new SynapseVoice (apvts));
@@ -225,6 +237,72 @@ void SynapseDeckProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     drums.prepare (sampleRate);
     drumBuf.setSize (2, samplesPerBlock);
     freeRunPos = 0.0;
+    flangeBuf.setSize (2, 4096);
+    flangeBuf.clear();
+    flangeW = 0;
+    heldNotes.clear(); arpCur = -1; arpCounter = 0.0;
+}
+
+void SynapseDeckProcessor::runArp (juce::MidiBuffer& in, juce::MidiBuffer& out, int n, double bpm, int rate, int pat, int range)
+{
+    for (const auto meta : in)
+    {
+        const auto m = meta.getMessage();
+        const int pos = meta.samplePosition;
+        if (m.isNoteOn())
+        {
+            const int nn = m.getNoteNumber();
+            if (std::find (heldNotes.begin(), heldNotes.end(), nn) == heldNotes.end())
+            {
+                const bool wasEmpty = heldNotes.empty();
+                heldNotes.push_back (nn);
+                std::sort (heldNotes.begin(), heldNotes.end());
+                if (wasEmpty) { arpCounter = 0.0; arpIdx = 0; }
+            }
+        }
+        else if (m.isNoteOff())
+        {
+            heldNotes.erase (std::remove (heldNotes.begin(), heldNotes.end(), m.getNoteNumber()), heldNotes.end());
+            if (heldNotes.empty() && arpCur >= 0) { out.addEvent (juce::MidiMessage::noteOff (1, arpCur), pos); arpCur = -1; }
+        }
+        else if (m.isAllNotesOff() || m.isAllSoundOff())
+        {
+            heldNotes.clear();
+            if (arpCur >= 0) { out.addEvent (juce::MidiMessage::noteOff (1, arpCur), pos); arpCur = -1; }
+        }
+        else
+            out.addEvent (m, pos);
+    }
+
+    if (heldNotes.empty()) arpCounter = 0.0;
+    const double stepLen = sr * 60.0 / juce::jmax (40.0, bpm) / (rate == 0 ? 2.0 : 4.0);
+    for (int i = 0; i < n; ++i)
+    {
+        if (arpCur >= 0)
+        {
+            arpOffCounter -= 1.0;
+            if (arpOffCounter <= 0.0) { out.addEvent (juce::MidiMessage::noteOff (1, arpCur), i); arpCur = -1; }
+        }
+        if (! heldNotes.empty() && arpCounter <= 0.0)
+        {
+            if (arpCur >= 0) { out.addEvent (juce::MidiMessage::noteOff (1, arpCur), i); arpCur = -1; }
+            seq.clear();
+            for (int o = 0; o <= range; ++o)
+                for (int hn : heldNotes) seq.push_back (hn + 12 * o);
+            const int sz = (int) seq.size();
+            int idx = 0;
+            if (pat == 0)      { idx = arpIdx % sz; ++arpIdx; }
+            else if (pat == 1) { idx = sz - 1 - (arpIdx % sz); ++arpIdx; }
+            else if (pat == 2) { const int period = juce::jmax (1, 2 * sz - 2); const int k = arpIdx % period; idx = k < sz ? k : period - k; ++arpIdx; }
+            else               { idx = arpRng.nextInt (sz); }
+            const int note = juce::jlimit (0, 127, seq[(size_t) idx]);
+            out.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), i);
+            arpCur = note;
+            arpOffCounter = stepLen * 0.7;
+            arpCounter += stepLen;
+        }
+        arpCounter -= 1.0;
+    }
 }
 
 void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -243,15 +321,136 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 if (msg.isNoteOn()) drums.hitNote (msg.getNoteNumber(), meta.samplePosition, msg.getFloatVelocity());
             }
             else
-                synthMidi.addEvent (msg, meta.samplePosition);
+            {
+                auto m = msg;
+                const bool pUp = apvts.getRawParameterValue ("fxPitchUp")->load() > 0.5f;
+                const bool pDn = apvts.getRawParameterValue ("fxPitchDn")->load() > 0.5f;
+                if (m.isNoteOn())
+                {
+                    const int nn = juce::jlimit (0, 127, m.getNoteNumber() + (pUp ? 12 : 0) - (pDn ? 12 : 0));
+                    noteMap[m.getNoteNumber()] = nn;
+                    m = juce::MidiMessage::noteOn (m.getChannel(), nn, m.getVelocity());
+                }
+                else if (m.isNoteOff())
+                {
+                    const int nn = noteMap[m.getNoteNumber()];
+                    noteMap[m.getNoteNumber()] = m.getNoteNumber();
+                    m = juce::MidiMessage::noteOff (m.getChannel(), nn, m.getVelocity());
+                }
+                synthMidi.addEvent (m, meta.samplePosition);
+            }
         }
         midi.swapWith (synthMidi);
     }
 
     auto prm = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
 
+    // tempo for arp / fx
+    double curBpm = prm ("freeBpm");
+    if (auto* ph0 = getPlayHead())
+        if (auto pos0 = ph0->getPosition())
+            if (auto b0 = pos0->getBpm()) curBpm = *b0;
+
+    // ---- arpeggiator ----
+    if (prm ("arpOn") > 0.5f)
+    {
+        arpOut.clear();
+        runArp (midi, arpOut, n, curBpm, (int) prm ("arpRate"), (int) prm ("arpPattern"), (int) prm ("arpRange"));
+        midi.swapWith (arpOut);
+    }
+    else if (arpCur >= 0 || ! heldNotes.empty())
+    {
+        if (arpCur >= 0) midi.addEvent (juce::MidiMessage::noteOff (1, arpCur), 0);
+        arpCur = -1; heldNotes.clear();
+    }
+
     // ---- synth ----
     synth.renderNextBlock (buffer, midi, 0, n);
+
+    // ---- performance fx pads (synth only) ----
+    const bool fPump = prm ("fxPump") > 0.5f, fStut = prm ("fxStutter") > 0.5f, fTrance = prm ("fxTrance") > 0.5f,
+               fTape = prm ("fxTape") > 0.5f, fLofi = prm ("fxLofi") > 0.5f, fPhone = prm ("fxPhone") > 0.5f,
+               fSpace = prm ("fxSpace") > 0.5f, fFlange = prm ("fxFlange") > 0.5f, fMute = prm ("fxMute") > 0.5f;
+    {
+        auto* L = buffer.getWritePointer (0);
+        auto* R = buffer.getWritePointer (1);
+        const double beatInc = juce::jmax (40.0, curBpm) / 60.0 / sr;
+        const bool anyGate = fPump || fStut || fTrance;
+        if (anyGate || fxGainS < 0.999f)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                fxBeat += beatInc;
+                if (fxBeat > 100000.0) fxBeat -= 100000.0;
+                const float f1 = (float) (fxBeat - std::floor (fxBeat));
+                const double s4 = fxBeat * 4.0, s2 = fxBeat * 2.0;
+                const float f16 = (float) (s4 - std::floor (s4)), f8 = (float) (s2 - std::floor (s2));
+                float tgt = 1.0f;
+                if (fPump)   tgt *= 1.0f - 0.92f * std::exp (-5.0f * f1);
+                if (fStut)   tgt *= f16 < 0.5f ? 1.0f : 0.0f;
+                if (fTrance) tgt *= f8 < 0.6f ? 1.0f : 0.1f;
+                fxGainS += (tgt - fxGainS) * 0.05f;
+                L[i] *= fxGainS; R[i] *= fxGainS;
+            }
+        }
+        if (fLofi)
+        {
+            float* ch2[2] = { L, R };
+            for (int c = 0; c < 2; ++c)
+            {
+                int cnt = lofiCnt;
+                for (int i = 0; i < n; ++i)
+                {
+                    if ((cnt++ & 3) == 0) lofiHold[c] = std::round (ch2[c][i] * 24.0f) / 24.0f;
+                    ch2[c][i] = lofiHold[c];
+                }
+            }
+            lofiCnt = (lofiCnt + n) & 3;
+        }
+        if (fPhone)
+        {
+            const float hpA = std::exp (-juce::MathConstants<float>::twoPi * 500.0f / (float) sr);
+            const float lpA = std::exp (-juce::MathConstants<float>::twoPi * 3200.0f / (float) sr);
+            float* ch2[2] = { L, R };
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < n; ++i)
+                {
+                    phoneLp[c] += (1.0f - lpA) * (ch2[c][i] - phoneLp[c]);
+                    const float y1 = phoneLp[c];
+                    phoneHp[c] += (1.0f - hpA) * (y1 - phoneHp[c]);
+                    ch2[c][i] = (y1 - phoneHp[c]) * 1.6f;
+                }
+        }
+        if (fFlange)
+        {
+            const int N = flangeBuf.getNumSamples();
+            auto* fb0 = flangeBuf.getWritePointer (0);
+            auto* fb1 = flangeBuf.getWritePointer (1);
+            for (int i = 0; i < n; ++i)
+            {
+                const float lfo = 0.5f + 0.5f * std::sin ((float) (flangeLfo * juce::MathConstants<double>::twoPi));
+                flangeLfo += 0.3 / sr; if (flangeLfo >= 1.0) flangeLfo -= 1.0;
+                const float dl = (0.7f + lfo * 3.5f) * 0.001f * (float) sr;
+                float rpos = (float) flangeW - dl;
+                while (rpos < 0.0f) rpos += (float) N;
+                const int i0 = (int) rpos % N, i1 = (i0 + 1) % N;
+                const float fr = rpos - std::floor (rpos);
+                const float y0 = fb0[i0] * (1.0f - fr) + fb0[i1] * fr;
+                const float y1 = fb1[i0] * (1.0f - fr) + fb1[i1] * fr;
+                const float x0 = L[i], x1 = R[i];
+                fb0[flangeW] = x0 + y0 * 0.45f; fb1[flangeW] = x1 + y1 * 0.45f;
+                L[i] = x0 * 0.7f + y0 * 0.7f; R[i] = x1 * 0.7f + y1 * 0.7f;
+                flangeW = (flangeW + 1) % N;
+            }
+        }
+        // tape stop: fade + darken while held, quick recovery on release
+        const float tapeTarget = fTape ? 0.0f : 1.0f;
+        const float tapeStep = (float) n / (float) (sr * (fTape ? 0.9 : 0.12));
+        const float tapePrev = tapeLvl;
+        tapeLvl = tapeLvl < tapeTarget ? juce::jmin (tapeTarget, tapeLvl + tapeStep) : juce::jmax (tapeTarget, tapeLvl - tapeStep);
+        if (tapePrev < 0.999f || tapeLvl < 0.999f)
+            buffer.applyGainRamp (0, n, tapePrev * tapePrev, tapeLvl * tapeLvl);
+    }
 
     // drive
     const float drive = prm ("drive");
@@ -266,7 +465,7 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     }
 
     // filter
-    const float cutoff = prm ("cutoff");
+    const float cutoff = prm ("cutoff") * (0.04f + 0.96f * tapeLvl);
     const float q = prm ("reso");
     ladder.setCutoffFrequencyHz (cutoff);
     ladder.setResonance (juce::jmap (q, 0.7f, 14.0f, 0.05f, 0.80f));
@@ -289,7 +488,9 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     // reverb (parallel wet)
     const float rv = prm ("reverb");
     juce::dsp::Reverb::Parameters rp;
-    rp.roomSize = 0.78f; rp.damping = 0.4f; rp.wetLevel = rv; rp.dryLevel = 1.0f - rv * 0.35f; rp.width = 1.0f;
+    rp.roomSize = fSpace ? 0.95f : 0.78f; rp.damping = fSpace ? 0.2f : 0.4f;
+    const float wet = fSpace ? juce::jmax (rv, 0.7f) : rv;
+    rp.wetLevel = wet; rp.dryLevel = 1.0f - wet * 0.35f; rp.width = 1.0f;
     reverb.setParameters (rp);
     {
         juce::dsp::AudioBlock<float> blk (buffer);
@@ -360,6 +561,7 @@ void SynapseDeckProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         renderHitsOnly();
     }
 
+    { const float muteT = fMute ? 0.0f : 1.0f; buffer.applyGainRamp (0, n, muteS, muteT); muteS = muteT; }
     { const float vol = prm ("volume"); buffer.applyGainRamp (0, n, lastVol, vol); lastVol = vol; }
     for (int ch = 0; ch < 2; ++ch)
     {
