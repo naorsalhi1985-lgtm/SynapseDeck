@@ -8,37 +8,29 @@ struct DeckLook : public juce::LookAndFeel_V4
                            float a0, float a1, juce::Slider& s) override
     {
         auto col = s.findColour (juce::Slider::rotarySliderFillColourId);
-        auto b = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (6.0f);
+        auto b = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (4.0f);
         const float r = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f;
         auto c = b.getCentre();
-        g.setColour (juce::Colour (0xaa10081e));
-        g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
-        const int N = 21;
-        const float rr = r - 3.0f;
+        const float rr = r - 5.0f;
         const float ang = a0 + pos * (a1 - a0);
-        for (int i = 0; i < N; ++i)
-        {
-            const float t = (float) i / (float) (N - 1);
-            const float a = a0 + t * (a1 - a0);
-            const float px = c.x + rr * std::sin (a), py = c.y - rr * std::cos (a);
-            const bool lit = t <= pos + 0.001f;
-            if (lit)
-            {
-                g.setGradientFill (juce::ColourGradient (col.withAlpha (0.55f), px, py, col.withAlpha (0.0f), px + 9.0f, py, true));
-                g.fillEllipse (px - 9.0f, py - 9.0f, 18.0f, 18.0f);
-                g.setColour (col.brighter (0.4f));
-                g.fillEllipse (px - 3.0f, py - 3.0f, 6.0f, 6.0f);
-            }
-            else
-            {
-                g.setColour (juce::Colour (0x44ffffff));
-                g.fillEllipse (px - 1.8f, py - 1.8f, 3.6f, 3.6f);
-            }
-        }
+        g.setColour (juce::Colour (0xcc0e0720));
+        g.fillEllipse (c.x - rr + 5.0f, c.y - rr + 5.0f, (rr - 5.0f) * 2.0f, (rr - 5.0f) * 2.0f);
+        juce::Path track;
+        track.addCentredArc (c.x, c.y, rr, rr, 0.0f, a0, a1, true);
+        g.setColour (juce::Colour (0x44ffffff));
+        g.strokePath (track, juce::PathStrokeType (4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        juce::Path val;
+        val.addCentredArc (c.x, c.y, rr, rr, 0.0f, a0, ang, true);
+        g.setColour (col.withAlpha (0.25f));
+        g.strokePath (val, juce::PathStrokeType (11.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (col);
+        g.strokePath (val, juce::PathStrokeType (4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        const float tx = c.x + rr * std::sin (ang), ty = c.y - rr * std::cos (ang);
+        g.setColour (col.withAlpha (0.45f));
+        g.fillEllipse (tx - 8.0f, ty - 8.0f, 16.0f, 16.0f);
         g.setColour (juce::Colours::white);
-        g.fillEllipse (c.x + rr * std::sin (ang) - 4.5f, c.y - rr * std::cos (ang) - 4.5f, 9.0f, 9.0f);
-        g.setColour (juce::Colours::white);
-        g.setFont (juce::FontOptions (juce::jmax (10.0f, r * 0.42f), juce::Font::bold));
+        g.fillEllipse (tx - 4.0f, ty - 4.0f, 8.0f, 8.0f);
+        g.setFont (juce::FontOptions (juce::jmax (10.0f, r * 0.36f), juce::Font::bold));
         g.drawText (s.getTextFromValue (s.getValue()), b.toNearestInt(), juce::Justification::centred);
     }
     void drawToggleButton (juce::Graphics& g, juce::ToggleButton& t, bool, bool) override
